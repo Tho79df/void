@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { curriculum, allConcepts, isChapterUnlocked } from './curriculum.js';
+import { supabase } from './supabase.js';
 
 // ─── Utilitaires ───────────────────────────────────────────────────────────
 function normalize(str) {
@@ -9,25 +10,6 @@ function normalize(str) {
     .filter(l => l.length > 0)
     .join('\n')
     .toLowerCase();
-}
-
-function loadProgress() {
-  try {
-    const raw = localStorage.getItem('c-learning-v2');
-    if (raw) {
-      const data = JSON.parse(raw);
-      return new Set(data);
-    }
-  } catch {}
-  return new Set();
-}
-
-function saveProgress(set) {
-  localStorage.setItem('c-learning-v2', JSON.stringify([...set]));
-}
-
-function loadTheme() {
-  return localStorage.getItem('c-learning-dark') === '1';
 }
 
 // ─── Confettis ─────────────────────────────────────────────────────────────
@@ -67,28 +49,9 @@ function GlobalProgress({ completed }) {
 }
 
 // ─── Écran d'accueil ────────────────────────────────────────────────────────
-function HomeScreen({ onStart, onQuiz, completedIds, setCompletedIds, darkMode, toggleDark }) {
+function HomeScreen({ onStart, onQuiz, completedIds, darkMode, toggleDark }) {
   const total = allConcepts.length;
   const done = completedIds.size;
-  
-  function handleExport() {
-    const data = JSON.stringify([...completedIds]);
-    navigator.clipboard.writeText(data).then(() => alert('Code de sauvegarde copié dans le presse-papier !'));
-  }
-
-  function handleImport() {
-    const code = prompt('Colle ici ton code de sauvegarde :');
-    if (code) {
-      try {
-        const parsed = JSON.parse(code);
-        setCompletedIds(new Set(parsed));
-        saveProgress(new Set(parsed));
-        alert('Progression restaurée avec succès !');
-      } catch {
-        alert('Code invalide.');
-      }
-    }
-  }
 
   return (
     <div className="screen home-screen">
@@ -113,10 +76,6 @@ function HomeScreen({ onStart, onQuiz, completedIds, setCompletedIds, darkMode, 
             🎮 Mode Quiz ({done} concept{done > 1 ? 's' : ''} disponible{done > 1 ? 's' : ''})
           </button>
         )}
-        <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-          <button className="btn btn-ghost" onClick={handleExport} style={{ flex: 1 }}>📤 Exporter code</button>
-          <button className="btn btn-ghost" onClick={handleImport} style={{ flex: 1 }}>📥 Importer code</button>
-        </div>
       </div>
     </div>
   );
@@ -502,11 +461,33 @@ function QuizScreen({ completedIds, onBack }) {
 
 // ─── App principale ──────────────────────────────────────────────────────────
 export default function App() {
-  const [darkMode, setDarkMode] = useState(loadTheme);
-  const [completedIds, setCompletedIds] = useState(loadProgress);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('c-learning-dark') === '1');
+  const [completedIds, setCompletedIds] = useState(new Set());
+  const [loading, setLoading] = useState(true);
   const [screen, setScreen] = useState('home');
   const [selectedLevel, setSelectedLevel] = useState(null);
   const [selectedChapter, setSelectedChapter] = useState(null);
+
+  useEffect(() => {
+    async function fetchProgress() {
+      try {
+        const { data, error } = await supabase
+          .from('progress')
+          .select('completed_concepts')
+          .eq('user_id', 'Tho79df')
+          .single();
+        
+        if (data && data.completed_concepts) {
+          setCompletedIds(new Set(data.completed_concepts));
+        }
+      } catch (err) {
+        console.error('Erreur chargement Supabase', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchProgress();
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light');
@@ -517,17 +498,30 @@ export default function App() {
     setCompletedIds(prev => {
       const next = new Set(prev);
       next.add(id);
-      saveProgress(next);
+      
+      // Sauvegarde dans Supabase
+      supabase.from('progress').upsert({
+        user_id: 'Tho79df',
+        completed_concepts: [...next]
+      }).then();
+      
       return next;
     });
   }, []);
+
+  if (loading) {
+    return (
+      <div className="app screen" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+        <h2>Chargement de ta progression cloud... ☁️</h2>
+      </div>
+    );
+  }
 
   return (
     <div className="app">
       {screen === 'home' && (
         <HomeScreen
           completedIds={completedIds}
-          setCompletedIds={setCompletedIds}
           darkMode={darkMode}
           toggleDark={() => setDarkMode(d => !d)}
           onStart={() => setScreen('levels')}
